@@ -39,13 +39,14 @@ def _extract_sidebar() -> dict[str, set[str]]:
     """返回 { group: {link, ...}, ... }，link 为相对于 docs 的路径。"""
     modules = [
         ("cs", SIDEBAR_DIR / "cs.js"),
-        ("database", SIDEBAR_DIR / "database.js"),
-        ("design", SIDEBAR_DIR / "design.js"),
-        ("distributed", SIDEBAR_DIR / "distributed.js"),
-        ("framework", SIDEBAR_DIR / "framework.js"),
-        ("interview-prep", SIDEBAR_DIR / "interview-prep.js"),
-        ("java", SIDEBAR_DIR / "java.js"),
-        ("questions", SIDEBAR_DIR / "questions.js"),
+        ("db", SIDEBAR_DIR / "db.js"),
+        ("ds", SIDEBAR_DIR / "ds.js"),
+        ("di", SIDEBAR_DIR / "di.js"),
+        ("fw", SIDEBAR_DIR / "fw.js"),
+        ("iv", SIDEBAR_DIR / "iv.js"),
+        ("ja", SIDEBAR_DIR / "ja.js"),
+        ("qa", SIDEBAR_DIR / "qa.js"),
+        ("pj", SIDEBAR_DIR / "pj.js"),
     ]
     result: dict[str, set[str]] = {}
     for group, fpath in modules:
@@ -218,7 +219,7 @@ def check_coverage(docs_subdir: Optional[str] = None) -> None:
         total_missing += len(missing)
         total_extra += len(extra)
 
-        if group == "questions":
+        if group == "qa":
             _print_group_diff_detailed(group, missing, extra)
         else:
             _print_group_diff(group, missing, extra)

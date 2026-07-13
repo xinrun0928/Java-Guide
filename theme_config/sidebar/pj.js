@@ -1,0 +1,67 @@
+export const pjSidebar = [
+    {
+        text: "电商核心",
+        link: "/pj/ecommerce/",
+        items: [
+            { text: "秒杀系统：流量削峰、限流与防超卖", link: "/pj/ecommerce/seckill" },
+            { text: "分布式库存：预扣减、回滚与最终一致性", link: "/pj/ecommerce/inventory" },
+            { text: "订单系统：状态机、幂等与分库分表", link: "/pj/ecommerce/order" },
+            { text: "支付系统：回调幂等、对账与补偿", link: "/pj/ecommerce/payment" },
+            { text: "退款系统：逆向流程、资金退回与状态同步", link: "/pj/ecommerce/refund" },
+            { text: "优惠券系统：领用核销、库存控制与防重复", link: "/pj/ecommerce/coupon" },
+            { text: "交易链路一致性：事务消息、补偿与数据对账", link: "/pj/ecommerce/transaction-consistency" },
+        ],
+    },
+    {
+        text: "内容与社交",
+        link: "/pj/content/",
+        items: [
+            { text: "Feed 流：推拉结合、读写扩散与时间线", link: "/pj/content/feed-flow" },
+            { text: "点赞系统：高并发计数、去重与数据回刷", link: "/pj/content/like" },
+            { text: "评论系统：楼中楼、热评排序与内容审核", link: "/pj/content/comment" },
+            { text: "排行榜：有序集合、分片与周期榜", link: "/pj/content/ranking" },
+            { text: "关注关系：关系存储、共同关注与大 V 优化", link: "/pj/content/follow" },
+            { text: "动态通知：事件聚合、未读计数与消息扇出", link: "/pj/content/notification" },
+            { text: "热点内容：热度算法、多级缓存与服务降级", link: "/pj/content/trending" },
+        ],
+    },
+    {
+        text: "即时通讯",
+        link: "/pj/im/",
+        items: [
+            { text: "IM 单聊：会话模型、消息序列与未读计数", link: "/pj/im/single-chat" },
+            { text: "IM 群聊：扩散策略、成员管理与大群优化", link: "/pj/im/group-chat" },
+            { text: "在线状态：心跳检测、状态同步与多端登录", link: "/pj/im/presence" },
+            { text: "消息可靠投递：ACK、重试、去重与顺序保证", link: "/pj/im/reliable-msg" },
+            { text: "离线推送：消息漫游、厂商通道与到达率", link: "/pj/im/offline-push" },
+            { text: "实时聊天室：长连接、广播与热点隔离", link: "/pj/im/chatroom" },
+            { text: "消息存储：冷热分层、索引与历史消息拉取", link: "/pj/im/message-storage" },
+        ],
+    },
+    {
+        text: "工具系统",
+        link: "/pj/tools/",
+        items: [
+            { text: "短链生成：发号器、哈希冲突与 301/302", link: "/pj/tools/short-url" },
+            { text: "二维码服务：编码纠错、动态码与安全校验", link: "/pj/tools/qr-code" },
+            { text: "文件存储：分片上传、断点续传与秒传", link: "/pj/tools/file-storage" },
+            { text: "CDN 加速：缓存策略、回源与刷新预热", link: "/pj/tools/cdn" },
+            { text: "图片处理：裁剪压缩、格式转换与异步任务", link: "/pj/tools/image-processing" },
+            { text: "对象存储：元数据、去重与生命周期管理", link: "/pj/tools/object-storage" },
+            { text: "下载服务：鉴权、防盗链与带宽控制", link: "/pj/tools/download" },
+        ],
+    },
+    {
+        text: "风控与稳定性",
+        link: "/pj/risk/",
+        items: [
+            { text: "风控规则引擎：规则编排、热更新与灰度发布", link: "/pj/risk/rule-engine" },
+            { text: "反欺诈系统：特征工程、实时决策与模型融合", link: "/pj/risk/anti-fraud" },
+            { text: "限流防刷：滑动窗口、令牌桶与设备指纹", link: "/pj/risk/anti-abuse" },
+            { text: "异地多活：数据同步、流量调度与故障切换", link: "/pj/risk/multi-region" },
+            { text: "混沌工程：故障注入、稳态指标与自动恢复", link: "/pj/risk/chaos-engineering" },
+            { text: "全链路压测：流量染色、影子库与容量评估", link: "/pj/risk/stress-testing" },
+            { text: "熔断降级：故障隔离、兜底策略与快速恢复", link: "/pj/risk/fallback" },
+        ],
+    },
+];
