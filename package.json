@@ -1,0 +1,30 @@
+{
+  "name": "java-guide",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "📚 基于 Rspress 构建的 Java 后端知识体系文档站，系统梳理核心基础、JVM、并发编程、Spring 生态、数据库及分布式架构，覆盖面试高频考点与实战场景。",
+  "scripts": {
+    "build": "rspress build",
+    "check": "biome check --write",
+    "dev": "rspress dev",
+    "format": "biome format --write",
+    "preview": "rspress preview"
+  },
+  "dependencies": {
+    "@rspress/core": "^2.0.6",
+    "clsx": "^2.1.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.6",
+    "@rsbuild/plugin-sass": "^1.5.1",
+    "@shikijs/transformers": "^4.0.2",
+    "@types/node": "^22.8.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "sass": "^1.99.0",
+    "shiki": "^4.0.2"
+  }
+}
