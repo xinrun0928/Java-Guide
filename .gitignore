@@ -5,6 +5,7 @@
 
 # Dist
 node_modules
+node_modules/.cache
 dist/
 doc_build/
 

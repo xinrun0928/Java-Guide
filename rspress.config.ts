@@ -140,6 +140,11 @@ export default defineConfig({
     plugins: [
       pluginSass(),
     ],
+    // 将 Rspack 持久化缓存放到独立的目录中，
+    // 避免与构建产物目录（doc_build）冲突。
+    // 默认情况下缓存目录会与输出目录重叠，导致 macOS 上出现
+    // "IO error: Directory not empty (os error 66)"。
+    cacheDirectory: path.join(__dirname, 'node_modules', '.cache', 'rspack'),
   },
 
   // ==============================================
