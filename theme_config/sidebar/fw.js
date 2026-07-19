@@ -88,7 +88,7 @@ export const fwSidebar = [
                     { text: "Kafka 顺序消息实现", link: "/fw/mq/kafka/ordering" },
                     { text: "Kafka 消息丢失与重复消费", link: "/fw/mq/kafka/message-loss" },
                     { text: "Kafka 存储机制与日志分段", link: "/fw/mq/kafka/storage" },
-                    { text: "Kafka 索引机制与零拷贝", link: "/fw/mq/kafka/index" },
+                    { text: "Kafka 索引机制与零拷贝", link: "/fw/mq/kafka/kafka-index" },
                     { text: "Kafka 控制器选举", link: "/fw/mq/kafka/controller" },
                     { text: "Kafka Rebalance 机制", link: "/fw/mq/kafka/rebalance" },
                     { text: "Kafka 日志压缩与清理策略", link: "/fw/mq/kafka/cleanup" },
