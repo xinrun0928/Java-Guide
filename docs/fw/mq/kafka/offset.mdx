@@ -1,0 +1,183 @@
+---
+title: Kafka Offset 管理
+description: 从消费者角度详解 Kafka Offset 的概念、提交方式、以及如何处理 Offset 相关的各种场景
+---
+
+# Kafka Offset 管理
+
+> 上一节 [Kafka 日志压缩与清理策略](/fw/mq/kafka/cleanup) 提到消息会被清理，Consumer 靠什么知道从哪开始消费？
+
+## Offset 是什么
+
+Offset 是消息在 Partition 中的唯一序号：
+
+```
+Partition 0:
+Offset: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10...
+
+Consumer A 消费到 Offset=5 停下
+Consumer B 消费到 Offset=8 停下
+
+下次 Consumer A 从 Offset=6 继续
+```
+
+## Offset 存储位置
+
+Consumer Group 的 Offset 存储在 Kafka 内部 Topic `__consumer_offsets`：
+
+```bash
+# 查看 __consumer_offsets 的分区数
+bin/kafka-topics.sh --describe --topic __consumer_offsets \
+    --bootstrap-server localhost:9092
+```
+
+### Offset 存储结构
+
+```json
+{
+  "key": "group-id:topic:partition",
+  "value": {
+    "offset": 12345,
+    "metadata": "timestamp:1234567890",
+    "commitTimestamp": 1234567900
+  }
+}
+```
+
+## 提交方式
+
+### 自动提交（默认）
+
+```java
+properties.put("enable.auto.commit", true);
+properties.put("auto.commit.interval.ms", 5000);
+```
+
+**优点**：简单
+**缺点**：可能重复消费或丢消息
+
+```mermaid
+sequenceDiagram
+    participant C as Consumer
+    participant K as Kafka
+
+    C->>K: poll() 返回消息 [0,1,2]
+    Note over C: 处理消息 0,1,2
+    C->>K: 自动提交 offset=3
+    Note over C: 提交成功
+    C->>K: poll() 返回消息 [3,4,5]
+    Note over C: 处理消息 3
+    C Crash! 消息 4,5 未处理，但 offset 已提交
+```
+
+### 手动提交（推荐）
+
+```java
+properties.put("enable.auto.commit", false);
+
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+
+    for (ConsumerRecord<String, String> record : records) {
+        process(record);
+    }
+
+    // ✅ 处理完成后提交
+    consumer.commitSync();
+}
+```
+
+### 异步提交
+
+```java
+// 同步提交会阻塞，等待 broker 确认
+// 异步提交不阻塞，可能丢消息
+
+consumer.commitAsync((offsets, exception) -> {
+    if (exception != null) {
+        log.error("提交失败: {}", offsets, exception);
+    }
+});
+```
+
+### 分批提交
+
+```java
+Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
+
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+
+    for (ConsumerRecord<String, String> record : records) {
+        process(record);
+        offsets.put(
+            new TopicPartition(record.topic(), record.partition()),
+            new OffsetAndMetadata(record.offset() + 1)
+        );
+    }
+
+    // 批量提交，减少开销
+    if (!offsets.isEmpty()) {
+        consumer.commitSync(offsets);
+        offsets.clear();
+    }
+}
+```
+
+## Offset 重置策略
+
+当没有已提交的 Offset 时：
+
+| 配置值 | 行为 |
+|--------|------|
+| `earliest` | 从头开始消费 |
+| `latest` | 从最新消息开始 |
+| `none` | 无 Offset 就抛异常 |
+
+```java
+properties.put("auto.offset.reset", "earliest");
+```
+
+## 常见问题
+
+### 1. Offset 丢失
+
+```java
+// ❌ 自动提交 + 处理失败未重试 = 丢消息
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+    for (ConsumerRecord<String, String> record : records) {
+        try {
+            process(record);
+        } catch (Exception e) {
+            // 处理失败，但没有记录 offset
+            // 下次消费从头开始
+        }
+    }
+}
+```
+
+### 2. Offset 重复提交
+
+```java
+// ❌ 每条消息都提交，性能差
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+    for (ConsumerRecord<String, String> record : records) {
+        process(record);
+        consumer.commitSync();  // 每条都提交
+    }
+}
+```
+
+## 最佳实践
+
+| 场景 | 推荐配置 |
+|------|----------|
+| 金融交易 | 手动同步提交 + 幂等处理 |
+| 日志采集 | 自动提交 + 允许少量重复 |
+| 实时计算 | 手动异步提交 + 定期同步 |
+
+---
+
+*Kafka 核心知识点已覆盖完毕。接下来进入 [RocketMQ 架构深度解析](/fw/mq/rocketmq/architecture)*

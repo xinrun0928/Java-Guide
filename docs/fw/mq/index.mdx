@@ -1,0 +1,73 @@
+---
+title: 消息队列
+description: 系统学习 Kafka、RocketMQ、RabbitMQ 的原理与应用，掌握高并发场景下的异步解耦方案
+---
+
+# 消息队列
+
+> 异步处理、削峰填谷、系统解耦 —— 消息队列是分布式架构的粘合剂。
+
+## 核心问题
+
+使用消息队列前，先问自己三个问题：
+
+| 问题 | 答案方向 |
+|------|----------|
+| 能否接受最终一致性？ | 是 → MQ；否 → 分布式事务 |
+| 消息丢失能接受吗？ | 不能 → 持久化 + 确认机制 |
+| 需要消息顺序吗？ | 是 → 单分区顺序消费 |
+
+## 学习路径
+
+### 入门篇
+
+- [消息队列应用场景](/fw/mq/scenarios) - MQ 解决什么问题
+- [消息队列选型矩阵](/fw/mq/selection) - Kafka vs RocketMQ vs RabbitMQ
+- [消息积压处理策略](/fw/mq/backlog) - 队列堆积怎么办
+- [MQ 高并发问题解决方案](/fw/mq/high-concurrency) - 丢失、重复、顺序问题
+
+### Kafka 篇
+
+高吞吐日志系统、大数据实时处理的标配：
+
+| 文章 | 重点 |
+|------|------|
+| [架构深度解析](/fw/mq/kafka/architecture) | Broker、Topic、Partition |
+| [分区与消费者组](/fw/mq/kafka/partition) | 并行消费、Rebalance |
+| [消息可靠性保证](/fw/mq/kafka/reliability) | acks、ISR、多副本 |
+| [存储机制与日志分段](/fw/mq/kafka/storage) | 顺序写入、稀疏索引 |
+| [索引机制与零拷贝](/fw/mq/kafka/kafka-index) | mmap、sendfile |
+| [控制器选举](/fw/mq/kafka/controller) | Controller、ISR |
+| [Offset 管理](/fw/mq/kafka/offset) | 消费进度管理 |
+
+### RocketMQ 篇
+
+电商、金融场景的首选，事务消息是亮点：
+
+| 文章 | 重点 |
+|------|------|
+| [架构深度解析](/fw/mq/rocketmq/architecture) | NameServer vs ZooKeeper |
+| [事务消息](/fw/mq/rocketmq/transaction) | 半消息、状态回查 |
+| [延迟消息](/fw/mq/rocketmq/delay) | 定时任务、超时取消 |
+| [消息过滤](/fw/mq/rocketmq/filter) | Tag、SQL92 |
+| [消费模式](/fw/mq/rocketmq/consume-mode) | 集群消费 vs 广播消费 |
+| [高可用机制](/fw/mq/rocketmq/ha) | 主从同步、Dledger |
+
+### RabbitMQ 篇
+
+低延迟场景的好选择，AMQP 协议更灵活：
+
+| 文章 | 重点 |
+|------|------|
+| [架构与 AMQP 协议](/fw/mq/rabbitmq/architecture) | Exchange、Queue、Binding |
+| [交换机类型](/fw/mq/rabbitmq/exchange-types) | Direct/Topic/Fanout/Headers |
+| [Queue 与存储机制](/fw/mq/rabbitmq/queue) | 持久化、内存管理 |
+| [消息可靠性投递](/fw/mq/rabbitmq/reliability) | Confirm、Return |
+| [死信队列](/fw/mq/rabbitmq/dead-letter) | DLX、重试机制 |
+| [延迟队列](/fw/mq/rabbitmq/delay-queue) | TTL+DLX、延迟插件 |
+| [集群与镜像队列](/fw/mq/rabbitmq/cluster) | 高可用部署 |
+| [权限管理与安全](/fw/mq/rabbitmq/security) | 用户、vhost、ACL |
+
+---
+
+*消息队列是异步通信的基础，了解 RPC 框架可深入服务同步通信方案*

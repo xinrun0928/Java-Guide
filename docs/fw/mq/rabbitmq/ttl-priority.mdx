@@ -1,0 +1,186 @@
+---
+title: TTL 消息与优先级队列
+description: 详解 RabbitMQ 的消息 TTL、队列 TTL、以及优先级队列的配置和使用场景
+---
+
+# TTL 消息与优先级队列
+
+> 上一节 [延迟队列与延迟插件](/fw/mq/rabbitmq/delay-queue) 提到消息 TTL，本节详细介绍 TTL 的各种用法和优先级队列。
+
+## 消息 TTL
+
+### 单条消息设置 TTL
+
+```java
+// 消息 30 秒后过期
+AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+    .expiration("30000")
+    .build();
+
+channel.basicPublish("exchange", "routing-key", properties, body);
+```
+
+### 队列级 TTL
+
+```java
+// 所有进入该队列的消息，30 秒后过期
+Map<String, Object> args = new HashMap<>();
+args.put("x-message-ttl", 30000);
+
+channel.queueDeclare("my-queue", true, false, false, args);
+```
+
+### 对比
+
+| 类型 | 生效对象 | 优先级 |
+|------|----------|--------|
+| 消息 TTL | 单条消息 | 高（单独设置） |
+| 队列 TTL | 队列所有消息 | 低（队列级别） |
+
+## 队列 TTL vs 消息 TTL
+
+```mermaid
+graph TB
+    subgraph "消息 TTL"
+        M1[消息1 TTL=10s]
+        M2[消息2 TTL=20s]
+        Q1[Queue]
+
+        M1 --> Q1
+        M2 --> Q1
+
+        Note over Q1: 分别计时，到期各自进入 DLX
+    end
+
+    subgraph "队列 TTL"
+        M3[消息3]
+        M4[消息4]
+        Q2[Queue TTL=30s]
+
+        M3 --> Q2
+        M4 --> Q2
+
+        Note over Q2: 统一计时，第一个进入的消息到期后全部进入 DLX
+    end
+```
+
+## 过期消息处理
+
+消息 TTL 到期后，会进入对应的死信交换机：
+
+```java
+// 设置死信交换机
+Map<String, Object> args = new HashMap<>();
+args.put("x-message-ttl", 30000);
+args.put("x-dead-letter-exchange", "dlx-exchange");
+args.put("x-dead-letter-routing-key", "dlx.key");
+
+channel.queueDeclare("order-queue", true, false, false, args);
+```
+
+## 优先级队列
+
+### 创建优先级队列
+
+```java
+// 声明最大优先级为 10 的队列
+Map<String, Object> args = new HashMap<>();
+args.put("x-max-priority", 10);
+
+channel.queueDeclare("priority-queue", true, false, false, args);
+```
+
+### 发送优先级消息
+
+```java
+// 发送优先级为 5 的消息
+AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+    .priority(5)
+    .deliveryMode(2)
+    .build();
+
+channel.basicPublish("exchange", "routing-key", properties, body);
+```
+
+### 消费顺序
+
+```
+消息顺序:  P1(1) P2(5) P3(3) P4(2) P5(10)
+
+Consumer 消费: P5(10) P2(5) P3(3) P4(2) P1(1)
+              ^^^^^^^ 按优先级从高到低
+```
+
+### 应用场景
+
+- **VIP 用户优先处理**：高优先级消息优先消费
+- **紧急任务插队**：紧急任务设置高优先级
+- **流量分级处理**：不同优先级的限流策略
+
+## 代码示例
+
+### 订单优先级处理
+
+```java
+@Service
+public class OrderProducer {
+
+    public void sendOrder(Order order) {
+        int priority = calculatePriority(order);
+
+        AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+            .deliveryMode(2)
+            .priority(priority)  // 设置优先级
+            .build();
+
+        channel.basicPublish("order-exchange", "order.created", properties,
+            order.toBytes());
+    }
+
+    private int calculatePriority(Order order) {
+        // VIP 订单优先级高
+        if ("VIP".equals(order.getCustomerType())) {
+            return 10;
+        }
+        // 大额订单优先
+        if (order.getAmount().compareTo(new BigDecimal("10000")) > 0) {
+            return 7;
+        }
+        // 普通订单
+        return 1;
+    }
+}
+```
+
+## 配置注意事项
+
+### 队列优先级限制
+
+```properties
+# 队列最大优先级
+x-max-priority: 10
+
+# 如果不设置，队列不生效优先级
+```
+
+### 内存考虑
+
+```java
+// ❌ 大量不同优先级的消息会占用更多内存
+// 建议：优先级范围控制在 5-10 级
+args.put("x-max-priority", 5);
+```
+
+## 面试回答框架
+
+**问题**：RabbitMQ 如何实现消息过期和优先级？
+
+**回答**：
+1. 消息 TTL：单个消息设置 `expiration`，或队列设置 `x-message-ttl`
+2. TTL 到期后消息进入死信交换机
+3. 优先级队列：设置 `x-max-priority`，高优先级消息优先被消费
+4. 优先级范围不宜过大，避免内存浪费
+
+---
+
+*TTL 和优先级处理消息特性，[消息幂等性与去重](/fw/mq/rabbitmq/idempotency) 讲解如何防止重复消费*

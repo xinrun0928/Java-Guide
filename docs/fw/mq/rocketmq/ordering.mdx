@@ -1,0 +1,137 @@
+---
+title: RocketMQ 顺序消息
+description: 详解 RocketMQ 顺序消息的实现原理、队列选择策略、以及与 Kafka 顺序消息的对比
+---
+
+# RocketMQ 顺序消息
+
+> 上一节 [RocketMQ 事务消息](/fw/mq/rocketmq/transaction) 提到消息发送，RocketMQ 的顺序消息与 Kafka 有不同的实现思路。
+
+## 顺序消息的两种类型
+
+| 类型 | 说明 | 实现难度 |
+|------|------|----------|
+| 全局顺序 | 所有消息按发送顺序消费 | 高（单队列） |
+| 分区顺序 | 同一 Topic 下，同一 key 的消息有序 | 中（按 key 分区） |
+
+## 实现方式
+
+### 发送端：按 key 路由队列
+
+```java
+// 按订单 ID 路由到同一队列
+mqProducer.send(msg, new MessageQueueSelector() {
+    @Override
+    public MessageQueue select(List<MessageQueue> mqs, Message msg, Object arg) {
+        String orderId = (String) arg;
+        int index = orderId.hashCode() % mqs.size();
+        return mqs.get(index);
+    }
+}, orderId);
+```
+
+### 消费端：顺序监听器
+
+```java
+consumer.subscribe("order-topic", "*");
+
+// 使用 MessageListenerOrderly（顺序消费）
+consumer.registerMessageListener(new MessageListenerOrderly() {
+    @Override
+    public ConsumeOrderlyStatus consumeMessage(List<MessageExt> msgs, ConsumeOrderlyContext context) {
+        for (MessageExt msg : msgs) {
+            try {
+                process(msg);
+            } catch (Exception e) {
+                // 消费失败，暂停当前队列
+                context.setSuspendCurrentQueueTimeMillis(1000);
+                return ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+            }
+        }
+        return ConsumeOrderlyStatus.SUCCESS;
+    }
+});
+```
+
+## 与 Kafka 对比
+
+| 维度 | RocketMQ | Kafka |
+|------|----------|-------|
+| 顺序粒度 | 队列级别 | 分区级别 |
+| 消费模型 | 单队列单线程 | 单分区单线程 |
+| 实现方式 | `MessageQueueSelector` | `ProducerRecord` 指定 Partition |
+| 灵活性 | 可自定义路由 | 只能按 key |
+
+## 顺序消费原理
+
+```mermaid
+graph TB
+    subgraph "Broker"
+        Q0[队列 0]
+        Q1[队列 1]
+        Q2[队列 2]
+    end
+
+    subgraph "Consumer"
+        L0[Listener 0 (独占)]
+        L1[Listener 1 (独占)]
+        L2[Listener 2 (独占)]
+    end
+
+    Q0 --> L0
+    Q1 --> L1
+    Q2 --> L2
+
+    Note over L0,L2: 每个 Listener 独占一个队列<br/>保证队列内消息顺序
+```
+
+**关键点**：RocketMQ 的 `ConsumeOrderlyStatus` 控制消费暂停，而非 Rebalance。
+
+## 常见问题
+
+### 消费失败导致卡住
+
+```java
+// ❌ 问题：消费失败后无限重试，队列卡死
+if (processFailed) {
+    return ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+}
+
+// ✅ 解决：设置最大重试次数
+context.setMaxReconsumeTimes(3);
+if (processFailed) {
+    return ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+}
+```
+
+### 并发消费破坏顺序
+
+```java
+// ❌ 错误：在监听器内并发处理
+consumer.registerMessageListener((msgs, context) -> {
+    msgs.parallelStream().forEach(this::process);  // 并发处理
+    return ConsumeOrderlyStatus.SUCCESS;
+});
+
+// ✅ 正确：串行处理
+consumer.registerMessageListener((msgs, context) -> {
+    for (MessageExt msg : msgs) {
+        process(msg);  // 串行处理
+    }
+    return ConsumeOrderlyStatus.SUCCESS;
+});
+```
+
+## 面试回答框架
+
+**问题**：RocketMQ 如何实现顺序消息？
+
+**回答**：
+1. 生产者按业务 key（如订单 ID）选择队列，保证同一 key 的消息发到同一队列
+2. 消费者使用 `MessageListenerOrderly`，单线程顺序消费
+3. 消费失败时暂停当前队列，而不是重试
+4. 核心原理：队列级别的锁机制
+
+---
+
+*顺序消息之外，[RocketMQ 延迟消息](/fw/mq/rocketmq/delay) 是另一个特色功能*

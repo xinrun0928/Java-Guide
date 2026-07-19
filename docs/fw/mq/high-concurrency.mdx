@@ -1,0 +1,157 @@
+---
+title: MQ 高并发问题解决方案
+description: 解析消息队列在高并发场景下常见的消息丢失、重复消费、顺序性等问题及应对策略
+---
+
+# MQ 高并发问题解决方案
+
+> 上一节 [消息积压处理策略](/fw/mq/backlog) 讲解了应急止血与根治，流量洪峰来临时，MQ 暴露的丢失、重复、顺序性问题更值得深究。
+
+## 消息丢失：三条防线
+
+消息从生产者到消费者，要经过三个环节，每个环节都可能导致消息丢失。
+
+### 防线一：生产者确认
+
+生产者发送消息后，需要等待 broker 确认：
+
+```java
+// Kafka 生产者配置
+properties.put("acks", "all");           // 所有副本确认
+properties.put("retries", 3);            // 重试 3 次
+properties.put("enable.idempotence", true);  // 幂等发送
+
+// RocketMQ 事务消息
+producer.sendMessageInTransaction(msg, new TransactionListener() {
+    @Override
+    public LocalTransactionState executeLocalTransaction(Message msg, Object arg) {
+        // 本地事务成功才提交
+        return LocalTransactionState.COMMIT_MESSAGE;
+    }
+});
+```
+
+### 防线二：Broker 持久化
+
+同步刷盘确保消息落盘后再返回确认：
+
+```properties
+# Kafka
+min.insync.replicas=2
+flush.messages=1
+flush.ms=0
+
+# RocketMQ
+flushDiskType=SYNC_FLUSH
+```
+
+### 防线三：消费者手动提交
+
+自动提交 offset 可能在消息未处理完时就提交了：
+
+```java
+// ❌ 错误：自动提交
+consumer.subscribe("topic", new MessageListener() {
+    public void onMessage(Message msg) {
+        process(msg);  // 还没处理完，offset 已经提交了
+    }
+});
+
+// ✅ 正确：手动提交，处理完再提交
+consumer.subscribe("topic", (msg, context) -> {
+    process(msg);
+    context.commit();  // 处理完再提交 offset
+});
+```
+
+## 重复消费：幂等是根本
+
+网络抖动、消费者重启、消费超时都会导致重复投递。解决方案是让消费逻辑幂等。
+
+### 唯一 ID 去重
+
+```java
+public void consume(Message msg) {
+    String msgId = msg.getMsgId();
+    // Redis setnx 原子操作
+    Boolean success = redis.setnx("consumed:" + msgId, "1", Duration.ofDays(7));
+    if (!success) {
+        return;  // 已消费过，跳过
+    }
+    doProcess(msg);
+}
+```
+
+### 数据库唯一索引
+
+```java
+public void consume(OrderMessage msg) {
+    try {
+        // 利用数据库唯一索引防止重复插入
+        orderMapper.insertIgnore(msg.getOrderId(), msg.getContent());
+    } catch (DuplicateKeyException e) {
+        log.info("重复消息: {}", msg.getOrderId());
+    }
+}
+```
+
+## 顺序性：单分区 + 单消费者
+
+全局有序代价太大，实际场景中通常只需要**局部有序**（同一订单的消息有序）。
+
+### Kafka 实现有序
+
+```java
+// 用订单 ID 作为 key，保证同一订单的消息到同一分区
+producer.send(new ProducerRecord<>("order-topic", orderId, message));
+
+// 消费端：一个分区只有一个消费者
+consumer.assign(Collections.singletonList(partition));
+```
+
+### RocketMQ 实现有序
+
+```java
+// 发送时指定 MessageQueueSelector
+mqProducer.send(msg, (mqs, msg1, arg) -> {
+    String orderId = (String) arg;
+    int index = orderId.hashCode() % mqs.size();
+    return mqs.get(index);
+}, orderId);
+
+// 消费时使用 MessageListenerOrderly
+consumer.subscribe("order-topic", "*");
+consumer.registerMessageListener(new MessageListenerOrderly() {
+    @Override
+    public ConsumeOrderlyStatus consumeMessage(List<MessageExt> msgs, ConsumeOrderlyContext context) {
+        for (MessageExt msg : msgs) {
+            // 单线程顺序消费
+            process(msg);
+        }
+        return ConsumeOrderlyStatus.SUCCESS;
+    }
+});
+```
+
+## 消费限流：保护下游
+
+```java
+// Semaphore 控制并发数
+Semaphore semaphore = new Semaphore(100);
+
+consumer.registerMessageListener((msgs, context) -> {
+    semaphore.acquire();
+    try {
+        for (MessageExt msg : msgs) {
+            process(msg);
+        }
+    } finally {
+        semaphore.release();
+    }
+    return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+});
+```
+
+---
+
+*掌握了这些通用问题，接下来深入了解 [Kafka 架构深度解析](/fw/mq/kafka/architecture)*

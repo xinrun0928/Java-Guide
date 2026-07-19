@@ -1,0 +1,210 @@
+---
+title: 消息幂等性与去重
+description: 详解 RabbitMQ 消息幂等性的实现方案：唯一消息 ID、数据库唯一索引、Redis 去重
+---
+
+# 消息幂等性与去重
+
+> 上一节 [TTL 消息与优先级队列](/fw/mq/rabbitmq/ttl-priority) 讲解了消息特性，本节讲解如何保证消息幂等消费。
+
+## 为什么需要幂等
+
+RabbitMQ 消息重复的原因：
+
+| 原因 | 说明 |
+|------|------|
+| 网络抖动 | Producer 未收到 ACK，重复发送 |
+| Consumer 重启 | 未 ACK 的消息重新投递 |
+| Rebalance | Consumer 重平衡，消息重新分配 |
+
+## 幂等方案一：唯一消息 ID
+
+### 生产者生成唯一 ID
+
+```java
+// 生产者：生成唯一消息 ID
+String messageId = UUID.randomUUID().toString();
+
+AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+    .deliveryMode(2)
+    .messageId(messageId)
+    .build();
+
+channel.basicPublish("order-exchange", "order.created", properties, body);
+```
+
+### 消费者去重
+
+```java
+@RabbitListener(queues = "order-queue")
+public void handleOrder(Message message, Channel channel) throws IOException {
+    String messageId = message.getMessageProperties().getMessageId();
+
+    // 查询数据库是否已处理
+    if (orderService.existsByMessageId(messageId)) {
+        // 已处理，直接 ACK
+        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        return;
+    }
+
+    try {
+        Order order = parseOrder(message);
+        orderService.process(order, messageId);
+        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+    } catch (Exception e) {
+        channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, true);
+    }
+}
+```
+
+## 幂等方案二：数据库唯一索引
+
+### 表设计
+
+```sql
+CREATE TABLE order_message (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    message_id VARCHAR(64) NOT NULL UNIQUE,
+    order_id VARCHAR(64) NOT NULL,
+    status VARCHAR(20) DEFAULT 'PROCESSING',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uk_message_id (message_id)
+);
+```
+
+### 消费逻辑
+
+```java
+public void processOrder(String messageId, Order order) {
+    try {
+        OrderMessage record = new OrderMessage();
+        record.setMessageId(messageId);
+        record.setOrderId(order.getId());
+        record.setStatus("PROCESSING");
+
+        // 唯一索引保证不会重复插入
+        orderMessageMapper.insert(record);
+
+        // 业务处理
+        doProcess(order);
+
+        // 更新状态
+        orderMessageMapper.updateStatus(messageId, "COMPLETED");
+
+    } catch (DuplicateKeyException e) {
+        // 重复消息，忽略
+        log.info("重复消息: {}", messageId);
+    }
+}
+```
+
+## 幂等方案三：Redis 去重
+
+### 分布式锁去重
+
+```java
+@Service
+public class IdempotentConsumer {
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
+    public void consume(Message message) {
+        String messageId = message.getMessageProperties().getMessageId();
+        String key = "mq:idempotent:" + messageId;
+
+        // SETNX 原子操作，已存在则跳过
+        Boolean success = redisTemplate.opsForValue()
+            .setIfAbsent(key, "1", Duration.ofDays(7));
+
+        if (!success) {
+            log.info("消息已处理: {}", messageId);
+            return;
+        }
+
+        try {
+            process(message);
+        } catch (Exception e) {
+            // 处理失败，删除标记，重试时重新处理
+            redisTemplate.delete(key);
+            throw e;
+        }
+    }
+}
+```
+
+### 布隆过滤器
+
+适合消息量极大的场景：
+
+```java
+// 布隆过滤器
+BloomFilter<String> filter = BloomFilter.create(
+    Funnels.stringFunnel(StandardCharsets.UTF_8),
+    1000000,  // 预期插入数
+    0.01       // 误判率
+);
+
+public boolean isProcessed(String messageId) {
+    if (filter.mightContain(messageId)) {
+        // 可能已处理，需要查询确认
+        return redisTemplate.hasKey("mq:idempotent:" + messageId);
+    }
+    // 一定未处理
+    return false;
+}
+```
+
+## 三种方案对比
+
+| 方案 | 优点 | 缺点 | 适用场景 |
+|------|------|------|----------|
+| 唯一 ID + 数据库 | 可靠 | 需要改造表结构 | 有数据库的业务 |
+| Redis 去重 | 性能高 | 依赖 Redis | 无数据库操作 |
+| 布隆过滤器 | 内存小 | 有误判 | 超大规模消息 |
+
+## 最佳实践
+
+```java
+// 综合方案：Redis + 数据库
+public void processMessage(Message message) {
+    String messageId = getMessageId(message);
+
+    // 1. Redis 快速去重
+    String key = "mq:idempotent:" + messageId;
+    if (Boolean.TRUE.equals(redisTemplate.hasKey(key))) {
+        return;  // 已处理
+    }
+
+    try {
+        // 2. 业务处理
+        doProcess(message);
+
+        // 3. 标记已处理
+        redisTemplate.opsForValue().set(key, "1", Duration.ofDays(7));
+
+    } catch (Exception e) {
+        // 失败时不删除标记，消息会重试
+        throw e;
+    }
+}
+```
+
+## 面试回答框架
+
+**问题**：RabbitMQ 消息重复怎么办？
+
+**回答**：
+1. 消息重复的原因：网络抖动、Consumer 重启、Rebalance
+2. 解决方案：消费端做幂等处理
+3. 具体方案：
+   - 生产者生成唯一消息 ID
+   - 消费端根据 ID 查询是否已处理
+   - 数据库唯一索引 / Redis 去重
+4. 最佳实践：Redis 快速去重 + 数据库最终确认
+
+---
+
+*幂等消费保证消息正确性，[RabbitMQ 集群与镜像队列](/fw/mq/rabbitmq/cluster) 讲解高可用部署*

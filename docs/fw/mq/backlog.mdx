@@ -1,0 +1,252 @@
+---
+title: 消息积压处理策略
+description: 当消息消费速度跟不上生产速度时，如何快速止损并彻底解决问题
+---
+
+# 消息积压处理策略
+
+> 上一节 [消息队列选型矩阵](/fw/mq/selection) 帮你选了对的 MQ，但选对了不代表用得稳。
+
+这是每个使用 MQ 的团队都可能遇到的场景。积压本身不可怕，可怕的是不知道如何快速止血。
+
+## 紧急止血三板斧
+
+### 1. 扩容消费者（最直接）
+
+先看看消费能力够不够。假设当前 5 个消费者，峰值消费速率是 1万/s，生产速率是 5万/s，积压会越来越严重。
+
+```bash
+# Kafka 增加分区数
+kafka-topics.sh --alter --topic order-events --partitions 20 --bootstrap-server kafka:9092
+
+# RocketMQ 增加消费线程
+consumer.setConsumeThreadMin(20);
+consumer.setConsumeThreadMax(40);
+```
+
+增加分区后，记得重新分配消费者。
+
+### 2. 丢弃非核心消息（断臂求生）
+
+如果业务允许暂时丢失数据，可以临时跳过高优先级消息，只消费关键数据：
+
+```java
+consumer.registerMessageListener((msgs, context) -> {
+    for (MessageExt msg : msgs) {
+        String tag = msg.getTags();
+        if ("HIGH".equals(tag)) {
+            // 核心消息，必须处理
+            processHighPriority(msg);
+        } else {
+            // 非核心，跳过
+            return ConsumeConcurrentlyStatus.SUCCESS;
+        }
+    }
+    return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+});
+```
+
+### 3. 消费者降级（保核心功能）
+
+将非核心消费者暂停，集中资源处理核心消息：
+
+```java
+// RocketMQ 暂停某个 consumer group
+mqAdmin.unsubscribe("order-notify-group", "*");
+```
+
+## 彻底解决积压问题
+
+止血之后要治病。积压的根本原因是**消费速度跟不上生产速度**，要长期解决，必须从定位瓶颈、性能优化、预防机制三个层面入手。
+
+### 定位瓶颈
+
+排查顺序至关重要：
+
+```bash
+# 1. 查看 Consumer Group 堆积情况
+bin/kafka-consumer-groups.sh --describe --group order-group --bootstrap-server kafka:9092
+
+# 输出示例
+# GROUP       TOPIC          PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+# order-group order-events   0          100000          1500000         1400000
+# order-group order-events   1          98000           1500000         1402000
+```
+
+LAG 列就是积压量。积压往往集中在**少数分区**——可能是因为分区键设计不合理，导致热点 key 都打到同一个分区。
+
+```bash
+# 2. 查看 Consumer 实例的 CPU / GC / IO
+jstack <pid> | grep -A 20 "consumer-thread"
+
+# 3. 查看数据库慢查询
+SELECT * FROM information_schema.processlist WHERE TIME > 5;
+```
+
+常见瓶颈：
+- **Consumer 处理慢**：下游 RPC、数据库写入、外部接口超时。
+- **GC 频繁**：Consumer 堆内存设置不合理，频繁 Full GC。
+- **数据库瓶颈**：热点行锁竞争、慢 SQL、连接池打满。
+- **下游服务限流**：被保护的下游主动限流，导致消费线程阻塞。
+
+### 性能优化三板斧
+
+#### 1. 批量消费
+
+把单条处理改为批量处理，减少网络和框架开销：
+
+```java
+// Kafka 批量消费
+consumer.subscribe(Arrays.asList("order-events"));
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+    // 批量入库
+    List<Order> orders = new ArrayList<>();
+    for (ConsumerRecord<String, String> record : records) {
+        orders.add(parse(record.value()));
+    }
+    if (!orders.isEmpty()) {
+        orderMapper.batchInsert(orders);  // 批量 SQL
+        consumer.commitSync();
+    }
+}
+```
+
+批量消费能把吞吐提升 5-10 倍，但要注意单批次大小不要超过 5MB（Kafka 默认 `max.partition.fetch.bytes`）。
+
+#### 2. 异步处理
+
+把消费线程从处理逻辑中解放出来，用线程池异步处理：
+
+```java
+ExecutorService executor = Executors.newFixedThreadPool(50);
+
+consumer.subscribe(Arrays.asList("order-events"));
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+    for (ConsumerRecord<String, String> record : records) {
+        final String value = record.value();
+        executor.submit(() -> processOrder(value));
+    }
+    consumer.commitSync();
+}
+```
+
+但异步化会引入额外的复杂性：处理失败如何重试？顺序如何保证？需要根据业务权衡。
+
+#### 3. 优化下游
+
+数据库、缓存、外部接口往往是真正的瓶颈：
+
+| 优化点 | 措施 |
+|--------|------|
+| 数据库 | 加索引、批量提交、读写分离、分库分表 |
+| 缓存 | 减少穿透、加本地缓存 |
+| 外部接口 | 并行调用、熔断降级 |
+| Redis Pipeline | 用 Pipeline 替代循环 SET |
+
+### 预防机制
+
+最好的应急是**永远不需要应急**。
+
+#### 1. 容量评估
+
+上线前评估峰值流量，按"日常 3 倍"规划容量：
+
+```yaml
+# 业务参数
+峰值 TPS：50000 msg/s
+单 Consumer 吞吐：2000 msg/s
+需要 Consumer 数：50000 / 2000 = 25 个
+
+# 加冗余
+实际部署：25 × 1.5 = 38 个 Consumer
+```
+
+#### 2. 监控告警
+
+必须设置的关键指标：
+
+| 指标 | 告警阈值 |
+|------|----------|
+| Consumer Lag | > 10万条 |
+| Consumer 实例数 | < 期望值的 80% |
+| 单条消息处理耗时 P99 | > 500ms |
+| Broker 磁盘使用率 | > 70% |
+| Consumer GC 时长占比 | > 10% |
+
+#### 3. 限流降级
+
+上游突发流量时，主动丢弃非核心消息，保护下游：
+
+```java
+RateLimiter rateLimiter = RateLimiter.create(10000); // 每秒 1万条
+
+consumer.registerMessageListener((msgs, context) -> {
+    for (MessageExt msg : msgs) {
+        if (!rateLimiter.tryAcquire()) {
+            // 超过限流阈值，直接 ACK 丢弃
+            return ConsumeConcurrentlyStatus.SUCCESS;
+        }
+        process(msg);
+    }
+    return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+});
+```
+
+#### 4. 弹性扩容
+
+容器化部署，配合 K8s HPA 根据 Lag 自动扩容 Consumer：
+
+```yaml
+# K8s HPA 配置示例
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-consumer-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-consumer
+  minReplicas: 10
+  maxReplicas: 100
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: kafka_consumergroup_lag
+      target:
+        type: Value
+        value: "10000"  # Lag 超过 1万条就扩容
+```
+
+## 真实案例：双十一零点防积压预案
+
+电商大促零点开闸前 30 分钟，运维团队的标准动作：
+
+1. **预热**：把 Consumer 实例数从日常的 20 个扩到 100 个。
+2. **降级非核心**：把推荐、积分、统计等非核心消息的处理暂时关闭。
+3. **数据库保护**：核心订单库的限流阈值临时调高到日常的 5 倍。
+4. **监控强化**：值班同学驻点，每 5 分钟看一次 Lag 曲线。
+5. **应急扩容脚本**：准备一键扩容脚本，10 分钟内能再加 50 个 Consumer。
+
+这套预案在 2024 年双十一扛住了零点 80万 msg/s 的峰值洪峰，全程 Lag 没超过 5万条。
+
+## 面试追问
+
+**Q：怎么判断消息积压是 Producer 太快还是 Consumer 太慢？**
+
+A：看 Lag 增长曲线。如果 Lag 持续线性增长，是 Consumer 太慢；如果 Lag 在某些时间点突然跳涨，是 Producer 突发流量。再结合 Consumer 的 CPU、GC、数据库慢查询定位具体瓶颈点。
+
+**Q：紧急扩容时 Kafka 增加分区需要注意什么？**
+
+A：1. 分区数只能增加不能减少；2. 分区数改变会触发 Consumer Rebalance；3. 分区键的哈希映射会改变，导致历史消息与新消息不在同一分区——顺序消息场景需要特别小心。
+
+**Q：积压几千万条消息，重启 Consumer 能消费完吗？**
+
+A：单纯重启没用，反而因为 Rebalance 加重延迟。正确做法是：先扩容 Consumer 到能跟上生产速率，再考虑要不要丢弃历史消息。Kafka 可以通过 `kafka-consumer-groups.sh --reset-offsets` 把 offset 重置到最新，跳过积压。
+
+---
+
+*掌握了积压处理策略，接下来看 MQ 在高并发场景下三大通病：[MQ 高并发问题解决方案](/fw/mq/high-concurrency)*

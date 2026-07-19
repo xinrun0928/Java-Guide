@@ -1,0 +1,212 @@
+---
+title: RabbitMQ 常见问题与排查
+description: 汇总 RabbitMQ 日常运维中的常见问题、排查方法及解决方案
+---
+
+# RabbitMQ 常见问题与排查
+
+> 上一节 [RabbitMQ 权限管理与安全](/fw/mq/rabbitmq/security) 讲解安全配置，本节汇总日常运维中的常见问题。
+
+## 连接问题
+
+### 连接被拒绝
+
+```bash
+# 查看端口是否监听
+netstat -tlnp | grep 5672
+
+# 查看防火墙
+iptables -L -n
+
+# 查看日志
+tail -f /var/log/rabbitmq/rabbit@host.log
+```
+
+**常见原因**：
+- RabbitMQ 未启动
+- 防火墙阻止
+- 端口配置错误
+- 用户权限不足
+
+### 连接数过多
+
+```bash
+# 查看连接数
+rabbitmqctl list_connections
+
+# 查看用户连接数
+rabbitmqctl list_connections user
+
+# 查看连接数限制
+rabbitmqctl show_limits
+```
+
+**解决方案**：
+```java
+// 消费者复用连接
+Connection connection = factory.newConnection();
+Channel channel = connection.createChannel();  // 多个 Channel 复用连接
+```
+
+## 消息问题
+
+### 消息堆积
+
+```bash
+# 查看队列状态
+rabbitmqctl list_queues name messages messages_ready
+
+# 查看消费者数量
+rabbitmqctl list_queues name consumers
+```
+
+**排查方向**：
+
+| 症状 | 可能原因 | 解决方案 |
+|------|----------|----------|
+| messages_ready 很多 | 消费慢/无消费者 | 增加消费者 |
+| messages_unacked 很多 | 消费处理慢 | 优化处理逻辑 |
+| 队列满 | 生产快消费慢 | 限流/扩容 |
+
+### 消息丢失
+
+```bash
+# 查看消息持久化
+rabbitmqctl list_queues name durable
+
+# 检查磁盘空间
+df -h
+```
+
+**排查步骤**：
+1. 检查 Exchange、Queue 是否 durable
+2. 检查消息是否设置 deliveryMode=2
+3. 检查磁盘空间是否充足
+4. 检查 Publisher Confirm 是否开启
+
+## 性能问题
+
+### 内存使用高
+
+```bash
+# 查看内存使用
+rabbitmqctl status | grep memory
+
+# 查看内存限制
+rabbitmqctl status | grep vm_memory_high_watermark
+```
+
+```properties
+# 调低内存阈值
+vm_memory_high_watermark.relative = 0.6
+```
+
+### 磁盘使用高
+
+```bash
+# 查看磁盘使用
+rabbitmqctl status | grep disk
+
+# 查看日志大小
+du -sh /var/log/rabbitmq/
+```
+
+**清理策略**：
+```bash
+# 清理过期日志
+rabbitmqctl rotate_logs YYYYMMDD
+```
+
+## 集群问题
+
+### 节点无法加入集群
+
+```bash
+# 查看集群状态
+rabbitmqctl cluster_status
+
+# 检查 Erlang Cookie
+cat /var/lib/rabbitmq/.erlang.cookie
+```
+
+**常见原因**：
+- Erlang Cookie 不一致
+- 主机名解析失败
+- 端口被占用
+
+### 镜像队列同步延迟
+
+```bash
+# 查看同步状态
+rabbitmqctl list_queues name synchronised_slave_nodes
+```
+
+```properties
+# 设置自动同步
+rabbitmqctl set_policy ha-sync "queue-name" '{"ha-mode":"all","ha-sync-mode":"automatic"}'
+```
+
+## 常用诊断命令
+
+```bash
+# 1. 查看集群状态
+rabbitmqctl cluster_status
+
+# 2. 查看队列信息
+rabbitmqctl list_queues name durable messages consumers
+
+# 3. 查看连接信息
+rabbitmqctl list_connections user recv_oct send_oct
+
+# 4. 查看交换机信息
+rabbitmqctl list_exchanges name type
+
+# 5. 查看 Binding 信息
+rabbitmqctl list_bindings source_name destination_name routing_key
+
+# 6. 查看用户权限
+rabbitmqctl list_user_permissions username
+
+# 7. 查看内存和磁盘
+rabbitmqctl status
+
+# 8. 查看插件
+rabbitmqctl list_plugins name version
+```
+
+## Management UI
+
+RabbitMQ 自带 Web 管理界面：
+
+```bash
+# 启用 Management 插件
+rabbitmq-plugins enable rabbitmq_management
+
+# 访问
+http://localhost:15672
+# 默认账号: guest/guest
+```
+
+### Management UI 功能
+
+- 可视化查看队列、交换机、绑定
+- 消息管理（查看、重新发送）
+- 用户和权限管理
+- 资源监控（内存、磁盘、连接）
+- 策略管理
+
+## 面试回答框架
+
+**问题**：RabbitMQ 常见问题有哪些？如何排查？
+
+**回答**：
+1. **连接问题**：检查端口、防火墙、用户权限
+2. **消息堆积**：检查消费者数量、处理逻辑
+3. **消息丢失**：检查持久化、Publisher Confirm
+4. **性能问题**：查看内存、磁盘使用
+5. **集群问题**：检查 Erlang Cookie、主机名解析
+6. 排查命令：`rabbitmqctl status`、`list_queues`、`cluster_status`
+
+---
+
+*RabbitMQ 章节完结。回到 [消息队列](/fw/mq) 看 Kafka / RocketMQ / RabbitMQ 的选型对比*

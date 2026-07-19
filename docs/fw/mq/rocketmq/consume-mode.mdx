@@ -1,0 +1,158 @@
+---
+title: RocketMQ 消费模式（集群/广播）
+description: 对比 RocketMQ 集群消费与广播消费的模式差异、适用场景以及配置方法
+---
+
+# RocketMQ 消费模式（集群/广播）
+
+> 上一节 [RocketMQ 消息过滤](/fw/mq/rocketmq/filter) 提到消息筛选，消费模式决定了消息如何分配给消费者。
+
+## 两种消费模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| 集群消费 | Consumer Group 内消息只被一个 Consumer 消费 | 大多数业务场景 |
+| 广播消费 | Group 内每个 Consumer 都能消费到全部消息 | 缓存同步、通知 |
+
+## 集群消费（默认）
+
+### 消息分配规则
+
+```mermaid
+graph TB
+    subgraph "Topic: order-topic"
+        Q0[队列 0]
+        Q1[队列 1]
+        Q2[队列 2]
+    end
+
+    subgraph "Consumer Group: order-group"
+        C1[Consumer 1]
+        C2[Consumer 2]
+    end
+
+    Q0 --> C1
+    Q1 --> C1
+    Q2 --> C2
+
+    Note over C1,C2: 每个队列只被一个 Consumer 消费
+```
+
+### 配置
+
+```java
+// 默认就是集群消费模式
+consumer.setMessageModel(MessageModel.CLUSTERING);
+```
+
+### 特点
+
+- 消息在 Consumer Group 内负载均衡
+- 一个 Consumer 宕机，其队列会被其他 Consumer 接管
+- 需要手动处理重复消费
+
+## 广播消费
+
+### 消息分发规则
+
+```mermaid
+graph TB
+    subgraph "Topic: config-topic"
+        M[配置消息]
+    end
+
+    subgraph "Consumer Group: config-group"
+        C1[Consumer 1]
+        C2[Consumer 2]
+        C3[Consumer 3]
+    end
+
+    M --> C1
+    M --> C2
+    M --> C3
+
+    Note over C1,C3: 每个 Consumer 都能收到全部消息
+```
+
+### 配置
+
+```java
+consumer.setMessageModel(MessageModel.BROADCASTING);
+```
+
+### 应用场景
+
+- **配置同步**：配置中心更新，所有实例同步刷新
+- **本地缓存更新**：商品信息变更，所有实例更新本地缓存
+- **推送通知**：向所有在线用户推送消息
+
+### 问题
+
+广播消费**不保证消息顺序**，且**不支持自动 offset 管理**：
+
+```java
+// 广播消费需要手动管理 offset
+consumer.registerMessageListener(new MessageListenerConcurrently() {
+    @Override
+    public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs,
+                                                     ConsumeConcurrentlyContext context) {
+        for (MessageExt msg : msgs) {
+            process(msg);
+            // 手动记录消费进度
+            offsetManager.saveOffset(msg.getTopic(), msg.getQueueId(), msg.getQueueOffset());
+        }
+        return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+    }
+});
+```
+
+## 模式对比
+
+| 维度 | 集群消费 | 广播消费 |
+|------|----------|----------|
+| 消息分配 | 组内负载均衡 | 组内全部推送 |
+| offset | Broker 自动管理 | 需手动管理 |
+| 顺序性 | 可保证 | 不保证 |
+| 消费进度 | 自动恢复 | 需自行存储 |
+| 适用场景 | 大多数业务 | 缓存同步、配置 |
+
+## 常见问题
+
+### 1. 集群消费重复消息
+
+```java
+// 集群消费，Consumer 宕机会触发 Rebalance
+// 新 Consumer 接管后从头消费，导致重复
+
+// 解决方案：消费端幂等处理
+@Service
+public class OrderConsumer {
+
+    public void consume(Message msg) {
+        String msgId = msg.getMsgId();
+        if (redis.setnx("consumed:" + msgId, "1")) {
+            process(msg);
+        }
+    }
+}
+```
+
+### 2. 广播消费消息堆积
+
+每个 Consumer 都消费全部消息，消息堆积会成倍放大。
+
+**解决**：增加 Consumer 数量，或改用集群消费。
+
+## 面试回答框架
+
+**问题**：RocketMQ 集群消费和广播消费有什么区别？
+
+**回答**：
+1. 集群消费：消息在 Consumer Group 内负载均衡，每条消息只被一个 Consumer 消费
+2. 广播消费：Group 内每个 Consumer 都能消费到全部消息
+3. 集群消费适用大多数业务，广播适用于缓存同步等场景
+4. 集群消费由 Broker 管理 offset，广播消费需手动管理
+
+---
+
+*消费模式决定了消息分发，[RocketMQ 高可用机制](/fw/mq/rocketmq/ha) 讲解 Broker 的高可用*
